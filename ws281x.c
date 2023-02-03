@@ -52,7 +52,7 @@ void init_smi(int width, int ns, int setup, int strobe, int hold) {
 
     
     //smi_cs->value = smi_l->value = smi_a->value = 0;
-    writel(0, smi_reg+SMI_CS);
+    writel(1<<4, smi_reg+SMI_CS);
     writel(0, smi_reg+SMI_L);
     writel(0, smi_reg+SMI_A);
     writel(0, smi_reg+SMI_DSR);
@@ -72,7 +72,7 @@ void init_smi(int width, int ns, int setup, int strobe, int hold) {
     
     writel(strobe | (hold << 16) | (setup << 24) | (width << 30), smi_reg+SMI_DSR);
     writel(strobe | (hold << 16) | (setup << 24) | (width << 30), smi_reg+SMI_DSW);
-    writel((8 << 12) | (8 << 18) | (2 << 6) | 2, smi_reg+SMI_DMC);
+    writel((8 << 12) | (8 << 18) | (4 << 6) | 4, smi_reg+SMI_DMC);
 
     //smi_dsr->rsetup = smi_dsw->wsetup = setup;
     //smi_dsr->rstrobe = smi_dsw->wstrobe = strobe;
@@ -167,21 +167,23 @@ static int device_release(struct inode *inode, struct file *file)
 
 static ssize_t device_write(struct file *file, const char __user *buf, size_t length, loff_t *offset) {
     if (!virtAddr) return 1;
-    printk(KERN_INFO "write detected; SMI length %d; status %08X\n", readl(smi_reg+SMI_L), readl(smi_reg+SMI_CS));
+    //printk(KERN_INFO "write detected; SMI length %d; status %08X, length %d\n", readl(smi_reg+SMI_L), readl(smi_reg+SMI_CS), length);
     uint8_t *txdata = (uint8_t *)(virtAddr + sizeof(DMA_CB));
     uint32_t i, j;
     uint32_t k = 0;
     uint8_t shift;
     uint8_t mask = 0x50;
     uint32_t u = 0;
+    uint32_t n_ch = 0;
+    for (i=conf.mask; i > 0; i = i >> 1) n_ch += (i&1);
 
     // TODO: make this part compatible with correctly sized memory
     // currently, this part only fills the first string
     memset(txdata, 0, dmamem_size-sizeof(DMA_CB));
-    for (i=0; i < length && i < 3*conf.stringlen; i+=3) {
+    for (i=0; i < length && i < 3*conf.stringlen*n_ch; i+=3) {
         copy_from_user(&k, buf+i, 3);
-        mask = (i >= 3*160 ? 0x40 : 0x10);
-        u = i % (3*160);
+        mask = (i >= 3*conf.stringlen ? 0x40 : 0x10);
+        u = i % (3*conf.stringlen);
         // Green pixels
         for (j=0; j < 8; j++) {
             txdata[(24*u+3*j)^1] |= mask;
@@ -203,7 +205,6 @@ static ssize_t device_write(struct file *file, const char __user *buf, size_t le
     }
 
     init_smi(0, 10, 10, 20, 10);
-    printk(KERN_INFO "after init %08X\n", readl(smi_reg+SMI_CS));
     if (conf.flags & WS281X_AUTO_UPDATE) {
         uint32_t prev = readl(smi_reg+SMI_L);
         uint32_t prev_dma = readl(dma_reg+DMA_TXFR_LEN);
@@ -214,7 +215,7 @@ static ssize_t device_write(struct file *file, const char __user *buf, size_t le
             //return -EBUSY;
         }*/
         update_leds();
-        printk(KERN_INFO "SMI length before: %d, SMI length after: %d, status %08X -> %08X, DMA %08X -> %08X\n", prev, readl(smi_reg+SMI_L), prev_cs, readl(smi_reg+SMI_CS), prev_dma, readl(dma_reg+DMA_TXFR_LEN));
+        // printk(KERN_INFO "SMI length before: %d, SMI length after: %d, status %08X -> %08X, DMA %08X -> %08X\n", prev, readl(smi_reg+SMI_L), prev_cs, readl(smi_reg+SMI_CS), prev_dma, readl(dma_reg+DMA_TXFR_LEN));
         /*SETBITS(1<<3, smi_reg+SMI_CS);
         writel(*((uint32_t*)txdata), smi_reg+SMI_D);
         writel(*(1+(uint32_t*)txdata), smi_reg+SMI_D);
