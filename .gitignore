@@ -1,0 +1,7 @@
+*.o
+*.mod
+*.mod.c
+*.mod.o
+*.ko
+.*
+!/.gitignore
