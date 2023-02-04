@@ -7,14 +7,14 @@
 #define MAJOR_NUM 238
 
 struct ws281x_chconfig {
-	uint32_t flags;
-	uint32_t length;
+    uint8_t mask;
+    uint8_t slot;
 };
 
 struct ws281x_config {
-	uint32_t flags;
-	uint32_t mask;
-	uint32_t stringlen;
+    uint32_t flags;
+    uint32_t mask;
+    uint32_t stringlen;
 };
 
 #define WS281X_BYTES_PER_LED    0x00000007

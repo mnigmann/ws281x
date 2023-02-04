@@ -26,6 +26,8 @@ uint64_t dma_mask;
 static int n_open = 0;
 struct ws281x_config conf;
 uint32_t dmamem_size;
+uint8_t masks[16];
+struct ws281x_chconfig chconf;
 
 dma_addr_t physAddr;
 void *virtAddr;
@@ -182,7 +184,7 @@ static ssize_t device_write(struct file *file, const char __user *buf, size_t le
     memset(txdata, 0, dmamem_size-sizeof(DMA_CB));
     for (i=0; i < length && i < 3*conf.stringlen*n_ch; i+=3) {
         copy_from_user(&k, buf+i, 3);
-        mask = (i >= 3*conf.stringlen ? 0x40 : 0x10);
+        mask = masks[i / (3*conf.stringlen)];
         u = i % (3*conf.stringlen);
         // Green pixels
         for (j=0; j < 8; j++) {
@@ -206,14 +208,14 @@ static ssize_t device_write(struct file *file, const char __user *buf, size_t le
 
     init_smi(0, 10, 10, 20, 10);
     if (conf.flags & WS281X_AUTO_UPDATE) {
-        uint32_t prev = readl(smi_reg+SMI_L);
-        uint32_t prev_dma = readl(dma_reg+DMA_TXFR_LEN);
-        uint32_t prev_cs = readl(smi_reg+SMI_CS);
-/*        if (!(prev_dma & 0x00000002)) {
+        //uint32_t prev = readl(smi_reg+SMI_L);
+        uint32_t prev_dma = readl(dma_reg+DMA_CS);
+        //uint32_t prev_cs = readl(smi_reg+SMI_CS);
+        if (!(prev_dma & 0x00000002)) {
             printk(KERN_INFO "CS %08X,      CONBLK_AD %08X, TI %08X,        SOURCE_AD %08X\n", readl(dma_reg+DMA_CS), readl(dma_reg+DMA_CONBLK_AD), readl(dma_reg+DMA_TI), readl(dma_reg+DMA_SRCE_AD));
             printk(KERN_INFO "DEST_AD %08X, TXFR_LEN %08X,  NEXTCONBK %08X, DEBUG %08X\n", readl(dma_reg+DMA_DEST_AD), readl(dma_reg+DMA_TXFR_LEN), readl(dma_reg+DMA_NEXTCONBK), readl(dma_reg+DMA_DEBUG));
             //return -EBUSY;
-        }*/
+        }
         update_leds();
         // printk(KERN_INFO "SMI length before: %d, SMI length after: %d, status %08X -> %08X, DMA %08X -> %08X\n", prev, readl(smi_reg+SMI_L), prev_cs, readl(smi_reg+SMI_CS), prev_dma, readl(dma_reg+DMA_TXFR_LEN));
         /*SETBITS(1<<3, smi_reg+SMI_CS);
@@ -237,8 +239,15 @@ long int device_ioctl(struct file *file, unsigned int num, unsigned long arg) {
             conf.flags = conf.flags & 0x7FFFFFFF;
             if ((conf.mask & 0xFF) == conf.mask) conf.flags |= WS281X_USE_8BIT;
             printk(KERN_INFO "ioctl received flags: %08X, stringlen: %d, mask: %08X\n", conf.flags, conf.stringlen, conf.mask);
-            uint32_t i = conf.mask, n=0;
-            for (; i>0; i=i>>1) n+=(i&1);
+            uint32_t i = conf.mask, n=0, j=0;
+            for (j=24; j < 72; j+=3) {
+                if (i&1) {
+                    n++;
+                    WRITEBITS(7<<(j%30), (5<<(j%30)), ioMemory + 4*(j/30));
+                }
+                i = i >> 1;
+            }
+                
             
             // Deallocate previous memory
             if (virtAddr) dma_free_coherent(&dev, dmamem_size, virtAddr, physAddr);
@@ -258,7 +267,8 @@ long int device_ioctl(struct file *file, unsigned int num, unsigned long arg) {
             }
             break;
         case IOCTL_CHCONFIG:
-            break;
+            copy_from_user(&chconf, (void *)arg, sizeof(chconf));
+            masks[chconf.slot & 0x0F] = chconf.mask;
         case IOCTL_UPDATE:
             update_leds();
             break;
@@ -302,7 +312,7 @@ int init_module() {
     //writel(1<<8, ioMemory+GPIO_CLR0);
     //writel((readl(ioMemory+0x04) & (~(7 << 12))) | (5 << 12), ioMemory+0x04);
     WRITEBITS((7<<12) | (7<<6), (5<<12) | (5<<6), ioMemory+0x04);
-    WRITEBITS((7<<21) | (7<<18), (5<<21) | (5<<18), ioMemory);
+    //WRITEBITS((7<<21) | (7<<18), (5<<21) | (5<<18), ioMemory);
     writel(1<<17, ioMemory + 0x1c);
 
 
