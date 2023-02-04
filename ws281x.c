@@ -3,9 +3,11 @@
 #include <asm/io.h>
 #include <linux/dma-mapping.h>
 #include <linux/device.h>
+#include <linux/kdev_t.h>
 #include <linux/delay.h>
 #include <linux/fs.h>
 #include <asm/uaccess.h>    /* for put_user */
+#include <linux/cdev.h>
 #include "rpi_dma_utils.h"
 #include "ws281x.h"
 
@@ -16,9 +18,13 @@ static void my_release(struct device *dev) {
 }
 
 
-static struct device dev = {
+static struct device _dev = {
 	.release = my_release
 };
+
+static struct device *dev;
+static struct device *dev_c;
+static struct cdev dev_h;
 
 uint64_t dma_mask;
 
@@ -32,6 +38,8 @@ struct ws281x_chconfig chconf;
 dma_addr_t physAddr;
 void *virtAddr;
 DMA_CB *cbp;
+static struct class *deviceFileClass;
+dev_t major_num;
 
 uint32_t colors[] = {0xFF0000, 0xFF9900, 0xCCFF00, 0x33FF00, 0x00FF66, 0x00FFFF, 0x0066FF, 0x3300FF, 0xCC00FF, 0xFF0099};
 #define N_LEDS 10
@@ -250,14 +258,14 @@ long int device_ioctl(struct file *file, unsigned int num, unsigned long arg) {
                 
             
             // Deallocate previous memory
-            if (virtAddr) dma_free_coherent(&dev, dmamem_size, virtAddr, physAddr);
-            dev.dma_mask = &dma_mask;
-            if (dma_set_mask_and_coherent(&dev, DMA_BIT_MASK(32))) {
+            if (virtAddr) dma_free_coherent(dev, dmamem_size, virtAddr, physAddr);
+            dev->dma_mask = &dma_mask;
+            if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32))) {
 		printk(KERN_INFO "No suitable DMA available\n");
 	    }            
             // Allocate DMA memory
             dmamem_size = PAGE_ROUNDUP(((conf.flags & WS281X_USE_8BIT) ? 24 : 48)*(conf.flags & WS281X_BYTES_PER_LED)*conf.stringlen + sizeof(DMA_CB));
-            virtAddr = dma_alloc_coherent(&dev, dmamem_size, &physAddr, GFP_KERNEL);
+            virtAddr = dma_alloc_coherent(dev, dmamem_size, &physAddr, GFP_KERNEL);
             if (!(virtAddr)) {
                 printk(KERN_INFO "Failed to allocate memory");
             } else {
@@ -297,10 +305,37 @@ void dac_ladder_write(int val) {
 int init_module() {
     printk(KERN_INFO "starting\n");
 
-    dev_set_name(&dev, "dmatest");
-    device_register(&dev);
+    /* // Allocate a device number
+    alloc_chrdev_region(&major_num, 0, 1, DRIVER_NAME);
 
-    register_chrdev(MAJOR_NUM, DEVICE_FILE_NAME, &fops);
+    // Create device class
+    deviceFileClass = class_create(THIS_MODULE, "ws281x");
+
+    // create device file
+    device_create(deviceFileClass, NULL, my_device_nr, NULL, "ws281x");
+
+    // Initialize device file
+    cdev_init(&dev, &fops);
+
+    // Regisering device to kernel
+    cdev_add(&dev, major_num, 1)*/
+
+    alloc_chrdev_region(&major_num, 0, 1, "ws281x");
+    printk(KERN_INFO "received number %d\n", major_num);
+    
+    deviceFileClass = class_create(THIS_MODULE, "ws281x");
+    dev_c = device_create(deviceFileClass, NULL, major_num, NULL, "ws281x");
+    if (IS_ERR(dev_c)) {
+        printk(KERN_INFO "error with device_create: %d\n", PTR_ERR(dev_c));
+    } else {
+        printk(KERN_INFO "device_create succeeded: %08X\n", (uint32_t)(dev_c));
+    }
+    dev = dev_c;
+    //dev_set_name(dev, "ws281x");
+    //device_register(dev);
+    //register_chrdev(MAJOR_NUM, DEVICE_FILE_NAME, &fops);
+    cdev_init(&dev_h, &fops);
+    cdev_add(&dev_h, major_num, 1);
 
     printk(KERN_INFO "allocating memory, preferred ioctl is %08X\n", IOCTL_CONFIG);
     // Set IO settings
@@ -342,15 +377,19 @@ int init_module() {
 }	
 
 void cleanup_module() {
-	if (virtAddr) dma_free_coherent(&dev, PAGE_SIZE, virtAddr, physAddr);     // Deallocate DMA memory
+    if (virtAddr) dma_free_coherent(dev, PAGE_SIZE, virtAddr, physAddr);     // Deallocate DMA memory
     SETBITS(1<<31, dma_reg+DMA_CS);     // Stop DMA
     writel(0, smi_reg+SMI_CS);          // Disable SMI
     iounmap(ioMemory);                  // Unmap memory
     iounmap(dma_reg);
     iounmap(smi_reg);
     iounmap(clk_reg);
-    unregister_chrdev(MAJOR_NUM, DEVICE_FILE_NAME);
-	device_unregister(&dev);
-	printk(KERN_INFO "stopping\n");
+
+    cdev_del(&dev_h);
+    device_destroy(deviceFileClass, major_num);
+    class_destroy(deviceFileClass);
+    unregister_chrdev_region(major_num, 1);
+    //device_unregister(dev);
+    printk(KERN_INFO "stopping\n");
 }
 
